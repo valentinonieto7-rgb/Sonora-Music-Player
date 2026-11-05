@@ -37,13 +37,5 @@ El ajuste de frecuencia solicita un modo de pantalla a Android; no garantiza 120
 - `lib/artwork_widgets.dart`, `lib/audio_file_info.dart`, `lib/marquee_text.dart`, `lib/ui_helpers.dart` y `lib/format_duration.dart`: widgets y utilidades compartidos.
 - Los iconos de inicio Android usan las variantes por densidad y el icono adaptativo/monocromático de `android/app/src/main/res`.
 
-## Ejecutar en el A54
-
-Activa la depuración USB, conecta el teléfono y ejecuta:
-
-```powershell
-flutter devices
-flutter run -d R5CW72E1QLB
-```
 
 En la app, selecciona tu carpeta de música y concede el permiso de audio y notificaciones cuando Android los solicite.
