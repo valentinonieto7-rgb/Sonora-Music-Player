@@ -18,6 +18,8 @@ import 'equalizer_presets.dart';
 import 'equalizer_state.dart';
 import 'music_settings_page.dart';
 import 'now_playing_page.dart';
+import 'playback_queue.dart';
+import 'playback_session.dart';
 import 'playlist_library_page.dart';
 import 'playlist_model.dart';
 import 'playback_transition_controller.dart';
@@ -136,13 +138,15 @@ class _QuickAccessCard extends StatelessWidget {
   }
 }
 
-class _MusicHomePageState extends State<MusicHomePage> {
+class _MusicHomePageState extends State<MusicHomePage>
+    with WidgetsBindingObserver {
   Color get _accent => widget.accentColor;
   static const _folderPreferenceKey = 'music_folder_path';
   static const _favoritesPreferenceKey = 'favorite_song_ids';
   static const _historyPreferenceKey = 'listening_history';
   static const _playCountsPreferenceKey = 'song_play_counts';
   static const _playlistsPreferenceKey = 'custom_playlists';
+  static const _playbackSessionPreferenceKey = 'playback_session';
   final OnAudioQuery _audioQuery = OnAudioQuery();
   final AndroidEqualizer _equalizer = AndroidEqualizer();
   late final AudioPlayer _audioPlayer = AudioPlayer(
@@ -180,8 +184,14 @@ class _MusicHomePageState extends State<MusicHomePage> {
   DateTime? _lastRecordedAt;
   StreamSubscription<int?>? _currentIndexSubscription;
   StreamSubscription<int?>? _audioSessionIdSubscription;
+  StreamSubscription<bool>? _playingSubscription;
+  Timer? _sessionSaveDebounce;
+  Timer? _sessionSaveTicker;
+  PlaybackSession? _pendingPlaybackSession;
   late final PlaybackTransitionController _transitionController;
   bool _isLoadingEqualizer = false;
+  bool _sessionRestoreHandled = false;
+  bool _sessionSaveErrorShown = false;
 
   List<SongModel> get _visibleSongs {
     final query = _searchController.text.trim().toLowerCase();
@@ -220,6 +230,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _transitionController = PlaybackTransitionController(_audioPlayer)
       ..configure(
         enabled: widget.smoothTransitionsEnabled,
@@ -242,11 +253,24 @@ class _MusicHomePageState extends State<MusicHomePage> {
       _currentSong = song;
       _currentSongNotifier.value = song;
       unawaited(_recordPlayedSong(song));
+      _schedulePlaybackSessionSave();
       if (mounted) setState(() {});
     });
+    _playingSubscription = _audioPlayer.playingStream.listen((playing) {
+      if (!playing) {
+        _schedulePlaybackSessionSave(const Duration(milliseconds: 250));
+      }
+    });
+    _sessionSaveTicker = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_audioPlayer.playing) unawaited(_persistPlaybackSession());
+    });
     unawaited(_restoreListeningData());
-    unawaited(_restorePlaylists());
-    unawaited(_restoreLibrary());
+    unawaited(_restorePlaylistsAndLibrary());
+  }
+
+  Future<void> _restorePlaylistsAndLibrary() async {
+    await _restorePlaylists();
+    await _restoreLibrary();
   }
 
   @override
@@ -271,14 +295,75 @@ class _MusicHomePageState extends State<MusicHomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _currentIndexSubscription?.cancel();
     _audioSessionIdSubscription?.cancel();
+    _playingSubscription?.cancel();
+    _sessionSaveDebounce?.cancel();
+    _sessionSaveTicker?.cancel();
     unawaited(_transitionController.dispose());
     _searchController.dispose();
     _currentSongNotifier.dispose();
     _equalizerStateNotifier.dispose();
     _audioPlayer.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(_persistPlaybackSession());
+    }
+  }
+
+  void _schedulePlaybackSessionSave([
+    Duration delay = const Duration(milliseconds: 700),
+  ]) {
+    _sessionSaveDebounce?.cancel();
+    _sessionSaveDebounce = Timer(delay, () {
+      unawaited(_persistPlaybackSession());
+    });
+  }
+
+  Future<void> _persistPlaybackSession() async {
+    if (_playbackQueue.isEmpty) return;
+    final session = PlaybackSession(
+      queuePaths: _playbackQueue.map((song) => song.data).toList(),
+      currentTrackPath: _currentSong?.data,
+      positionMilliseconds: _currentSong == null
+          ? 0
+          : _audioPlayer.position.inMilliseconds,
+      playlistId: _activePlaylistId,
+    );
+    try {
+      await _preferences.setString(
+        _playbackSessionPreferenceKey,
+        jsonEncode(session.toJson()),
+      );
+      _sessionSaveErrorShown = false;
+    } catch (error) {
+      debugPrint('No se pudo guardar la sesión de reproducción: $error');
+      if (_sessionSaveErrorShown || !mounted) return;
+      _sessionSaveErrorShown = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo guardar tu progreso')),
+      );
+    }
+  }
+
+  Future<void> _clearPlaybackSession() async {
+    _sessionSaveDebounce?.cancel();
+    try {
+      await _preferences.remove(_playbackSessionPreferenceKey);
+    } catch (error) {
+      debugPrint('No se pudo borrar la sesión de reproducción: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo borrar la sesión guardada')),
+      );
+    }
   }
 
   Future<void> _loadEqualizerParameters() async {
@@ -420,12 +505,48 @@ class _MusicHomePageState extends State<MusicHomePage> {
   Future<void> _restoreLibrary() async {
     try {
       final path = await _preferences.getString(_folderPreferenceKey);
+      final sessionJson = await _preferences.getString(
+        _playbackSessionPreferenceKey,
+      );
+      if (sessionJson != null) {
+        try {
+          final decoded = jsonDecode(sessionJson);
+          if (decoded is! Map<String, dynamic>) {
+            throw const FormatException(
+              'El formato de la sesión de reproducción no es válido',
+            );
+          }
+          _pendingPlaybackSession = PlaybackSession.fromJson(decoded);
+        } catch (error) {
+          _sessionRestoreHandled = true;
+          debugPrint('No se pudo recuperar la sesión de reproducción: $error');
+          try {
+            await _preferences.remove(_playbackSessionPreferenceKey);
+          } catch (removeError) {
+            debugPrint(
+              'No se pudo borrar la sesión de reproducción dañada: $removeError',
+            );
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No se pudo recuperar la reproducción anterior'),
+              ),
+            );
+          }
+        }
+      } else {
+        _sessionRestoreHandled = true;
+      }
       if (!mounted || path == null || path.isEmpty) return;
       setState(() {
         _selectedFolderPath = path;
       });
       await _loadSongs(folderPath: path);
     } catch (error) {
+      _sessionRestoreHandled = true;
+      _pendingPlaybackSession = null;
+      debugPrint('No se pudo recuperar la sesión de reproducción: $error');
       if (!mounted) return;
       setState(() {
         _loadError = 'No se pudo recuperar la carpeta guardada: $error';
@@ -467,7 +588,9 @@ class _MusicHomePageState extends State<MusicHomePage> {
 
   Future<void> _restorePlaylists() async {
     try {
-      final savedPlaylists = await _preferences.getString(_playlistsPreferenceKey);
+      final savedPlaylists = await _preferences.getString(
+        _playlistsPreferenceKey,
+      );
       if (savedPlaylists == null) return;
       final decoded = jsonDecode(savedPlaylists);
       if (decoded is! List) {
@@ -499,10 +622,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   void _showPlaylistMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 2),
-      ),
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
     );
   }
 
@@ -648,6 +768,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
           audioQuery: _audioQuery,
           onChanged: _savePlaylists,
           onPlay: _playPlaylist,
+          onAddNext: _addSongToPlayNext,
         ),
       ),
     );
@@ -675,6 +796,111 @@ class _MusicHomePageState extends State<MusicHomePage> {
       setState(() => _currentSong = song);
       _currentSongNotifier.value = song;
       unawaited(_recordPlayedSong(song));
+      unawaited(_resumePlayback());
+      if (openPlayer) await _openNowPlaying();
+    } catch (error) {
+      _showPlaybackError(error);
+    }
+  }
+
+  Future<void> _addSongToPlayNext(SongModel song) async {
+    final currentSong = _currentSong;
+    final queue = PlaybackQueue.insertNext(
+      _playbackQueue,
+      song,
+      pathOf: (item) => item.data,
+      currentPath: currentSong?.data,
+    );
+    if (queue == null) {
+      _showPlaybackMessage('Esta canción ya está sonando.');
+      return;
+    }
+    final wasAlreadyQueued = _playbackQueue.any(
+      (item) => item.data == song.data,
+    );
+    if (!wasAlreadyQueued) _activePlaylistId = null;
+    await _replacePlaybackQueue(
+      queue,
+      currentSong: currentSong,
+      position: _audioPlayer.position,
+      wasPlaying: _audioPlayer.playing,
+    );
+    if (mounted) _showPlaybackMessage('Se reproducirá a continuación.');
+  }
+
+  Future<void> _replacePlaybackQueue(
+    List<SongModel> queue, {
+    required SongModel? currentSong,
+    required Duration position,
+    required bool wasPlaying,
+  }) async {
+    try {
+      final currentPath = currentSong?.data;
+      final playlistId = _activePlaylistId;
+      if (_isShuffleEnabled) {
+        await _audioPlayer.setShuffleModeEnabled(false);
+        _isShuffleEnabled = false;
+      }
+      await _configureQueue(queue, playlistId: playlistId);
+      if (queue.isEmpty) {
+        _currentSong = null;
+        _currentSongNotifier.value = null;
+        _hasStartedPlayback = false;
+        _activePlaylistId = null;
+        await _clearPlaybackSession();
+      } else if (currentPath != null) {
+        var index = queue.indexWhere((song) => song.data == currentPath);
+        var restoredPosition = position;
+        if (index < 0) {
+          index = 0;
+          restoredPosition = Duration.zero;
+        }
+        final song = queue[index];
+        final duration = Duration(milliseconds: song.duration ?? 0);
+        if (duration > Duration.zero && restoredPosition > duration) {
+          restoredPosition = duration;
+        }
+        await _audioPlayer.seek(restoredPosition, index: index);
+        _hasStartedPlayback = true;
+        _currentSong = song;
+        _currentSongNotifier.value = song;
+        if (wasPlaying) unawaited(_resumePlayback());
+        _schedulePlaybackSessionSave();
+      } else {
+        _hasStartedPlayback = false;
+        _currentSong = null;
+        _currentSongNotifier.value = null;
+        _schedulePlaybackSessionSave();
+      }
+      if (mounted) setState(() {});
+    } catch (error) {
+      _showPlaybackError(error);
+    }
+  }
+
+  void _showPlaybackMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  Future<void> _playQueueAt(int index, {bool openPlayer = false}) async {
+    if (index < 0 || index >= _playbackQueue.length) return;
+    final queue = List<SongModel>.of(_playbackQueue);
+    final playlistId = _activePlaylistId;
+    if (playlistId != null) {
+      await _playPlaylist(playlistId, queue, index, openPlayer);
+      return;
+    }
+    final song = queue[index];
+    try {
+      await _requestNotificationPermission();
+      _hasStartedPlayback = true;
+      await _audioPlayer.seek(Duration.zero, index: index);
+      if (!mounted) return;
+      setState(() => _currentSong = song);
+      _currentSongNotifier.value = song;
       unawaited(_resumePlayback());
       if (openPlayer) await _openNowPlaying();
     } catch (error) {
@@ -757,7 +983,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   }
 
   Future<void> _showQueue() async {
-    if (_playbackQueue.isEmpty) {
+    if (_playbackQueue.isEmpty && _songs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Primero selecciona una carpeta musical')),
       );
@@ -767,50 +993,156 @@ class _MusicHomePageState extends State<MusicHomePage> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.sizeOf(context).height * 0.7,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                child: Text(
-                  'Cola de reproducción · ${_playbackQueue.length}',
-                  style: Theme.of(context).textTheme.titleLarge,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.76,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Cola de reproducción · ${_playbackQueue.length}',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _playbackQueue.isEmpty
+                            ? null
+                            : () async {
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (dialogContext) => AlertDialog(
+                                    title: const Text('Vaciar cola'),
+                                    content: const Text(
+                                      '¿Quieres quitar todas las canciones de la cola?',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, false),
+                                        child: const Text('Cancelar'),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, true),
+                                        child: const Text('Vaciar'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirmed != true) return;
+                                await _replacePlaybackQueue(
+                                  const [],
+                                  currentSong: null,
+                                  position: Duration.zero,
+                                  wasPlaying: false,
+                                );
+                                if (context.mounted) {
+                                  setSheetState(() {});
+                                }
+                              },
+                        child: const Text('Vaciar'),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _playbackQueue.length,
-                  itemBuilder: (context, index) {
-                    final song = _playbackQueue[index];
-                    return ListTile(
-                      leading: Text('${index + 1}'),
-                      title: Text(song.title, maxLines: 1),
-                      subtitle: Text(song.artist ?? 'Artista desconocido'),
-                      trailing: song.id == _currentSong?.id
-                          ? Icon(Icons.equalizer_rounded, color: _accent)
-                          : null,
-                      onTap: () {
-                        Navigator.pop(context);
-                        final playlistId = _activePlaylistId;
-                        if (playlistId == null) {
-                          _playSong(song, openPlayer: true);
-                        } else {
-                          _playPlaylist(
-                            playlistId,
-                            _playbackQueue,
-                            index,
-                            true,
-                          );
-                        }
-                      },
-                    );
-                  },
+                Expanded(
+                  child: _playbackQueue.isEmpty
+                      ? const Center(child: Text('La cola está vacía'))
+                      : ReorderableListView.builder(
+                          itemCount: _playbackQueue.length,
+                          onReorderItem: (oldIndex, newIndex) async {
+                            final queue = PlaybackQueue.reorder(
+                              _playbackQueue,
+                              oldIndex,
+                              newIndex,
+                            );
+                            final currentSong = _currentSong;
+                            final position = _audioPlayer.position;
+                            final wasPlaying = _audioPlayer.playing;
+                            await _replacePlaybackQueue(
+                              queue,
+                              currentSong: currentSong,
+                              position: position,
+                              wasPlaying: wasPlaying,
+                            );
+                            if (context.mounted) setSheetState(() {});
+                          },
+                          itemBuilder: (context, index) {
+                            final song = _playbackQueue[index];
+                            final isCurrent = song.data == _currentSong?.data;
+                            return ListTile(
+                              key: ValueKey(song.data),
+                              leading: isCurrent
+                                  ? Icon(
+                                      Icons.equalizer_rounded,
+                                      color: _accent,
+                                    )
+                                  : Text('${index + 1}'),
+                              title: Text(song.title, maxLines: 1),
+                              subtitle: Text(
+                                song.artist ?? 'Artista desconocido',
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Quitar de la cola',
+                                    onPressed: () async {
+                                      final queue = PlaybackQueue.removeAt(
+                                        _playbackQueue,
+                                        index,
+                                      );
+                                      final currentSong = _currentSong;
+                                      final position = _audioPlayer.position;
+                                      final wasPlaying = _audioPlayer.playing;
+                                      final removingCurrent =
+                                          song.data == currentSong?.data;
+                                      final nextSong =
+                                          removingCurrent && queue.isNotEmpty
+                                          ? queue[min(index, queue.length - 1)]
+                                          : currentSong;
+                                      await _replacePlaybackQueue(
+                                        queue,
+                                        currentSong: nextSong,
+                                        position: removingCurrent
+                                            ? Duration.zero
+                                            : position,
+                                        wasPlaying: wasPlaying,
+                                      );
+                                      if (context.mounted) {
+                                        setSheetState(() {});
+                                      }
+                                    },
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  ReorderableDragStartListener(
+                                    index: index,
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: Icon(Icons.drag_handle_rounded),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              onTap: () {
+                                Navigator.pop(context);
+                                _playQueueAt(index, openPlayer: true);
+                              },
+                            );
+                          },
+                        ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -823,6 +1155,9 @@ class _MusicHomePageState extends State<MusicHomePage> {
         dialogTitle: 'Selecciona la carpeta de música',
       );
       if (folderPath == null || !mounted) return;
+      _pendingPlaybackSession = null;
+      _sessionRestoreHandled = true;
+      await _clearPlaybackSession();
       setState(() {
         _selectedFolderPath = folderPath;
         _songs = [];
@@ -852,6 +1187,10 @@ class _MusicHomePageState extends State<MusicHomePage> {
     final previousSong = preservePlayback ? _currentSong : null;
     final previousPosition = _audioPlayer.position;
     final wasPlaying = preservePlayback && _audioPlayer.playing;
+    final previousQueue = preservePlayback && _playbackQueue.isNotEmpty
+        ? List<SongModel>.of(_playbackQueue)
+        : null;
+    final previousPlaylistId = previousQueue == null ? null : _activePlaylistId;
 
     setState(() {
       _isLoading = true;
@@ -899,18 +1238,26 @@ class _MusicHomePageState extends State<MusicHomePage> {
         _selectedAlbum = null;
         _selectedArtist = null;
       });
-      await _configureQueue(songs);
+      if (_pendingPlaybackSession != null && !_sessionRestoreHandled) {
+        await _restorePlaybackSession(songs);
+      } else {
+        final queue = previousQueue ?? songs;
+        await _configureQueue(queue, playlistId: previousPlaylistId);
+      }
       if (previousSong != null) {
-        final index = songs.indexWhere((song) => song.id == previousSong.id);
+        final index = _playbackQueue.indexWhere(
+          (song) => song.data == previousSong.data,
+        );
         if (index >= 0) {
           _hasStartedPlayback = true;
           await _audioPlayer.seek(previousPosition, index: index);
-          _currentSong = songs[index];
+          _currentSong = _playbackQueue[index];
           _currentSongNotifier.value = _currentSong;
           if (wasPlaying) unawaited(_resumePlayback());
           if (mounted) setState(() {});
         }
       }
+      _schedulePlaybackSessionSave();
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -925,25 +1272,68 @@ class _MusicHomePageState extends State<MusicHomePage> {
     }
   }
 
+  Future<void> _restorePlaybackSession(List<SongModel> songs) async {
+    final session = _pendingPlaybackSession!;
+    final songsByPath = {for (final song in songs) song.data: song};
+    var queue = session.queuePaths
+        .map((path) => songsByPath[path])
+        .whereType<SongModel>()
+        .toList();
+    if (queue.isEmpty) queue = List.of(songs);
+    final restoredPlaylistId =
+        _playlists.any((playlist) => playlist.id == session.playlistId)
+        ? session.playlistId
+        : null;
+    await _configureQueue(queue, playlistId: restoredPlaylistId);
+    _sessionRestoreHandled = true;
+    _pendingPlaybackSession = null;
+
+    final currentIndex = session.currentTrackPath == null
+        ? -1
+        : queue.indexWhere((song) => song.data == session.currentTrackPath);
+    if (currentIndex >= 0) {
+      final song = queue[currentIndex];
+      final savedPosition = Duration(
+        milliseconds: session.positionMilliseconds,
+      );
+      final duration = Duration(milliseconds: song.duration ?? 0);
+      final position = duration > Duration.zero && savedPosition > duration
+          ? duration
+          : savedPosition;
+      _hasStartedPlayback = true;
+      await _audioPlayer.seek(position, index: currentIndex);
+      _currentSong = song;
+      _currentSongNotifier.value = song;
+      unawaited(_recordPlayedSong(song));
+    }
+    if (mounted) setState(() {});
+    await _persistPlaybackSession();
+  }
+
   Future<void> _playSong(SongModel song, {bool openPlayer = false}) async {
     try {
       await _requestNotificationPermission();
       if (_activePlaylistId != null) {
         await _configureQueue(_songs);
       }
-      var index = _songs.indexWhere((item) => item.id == song.id);
+      var index = _playbackQueue.indexWhere((item) => item.data == song.data);
+      if (index < 0) {
+        await _configureQueue(_songs);
+        index = _playbackQueue.indexWhere((item) => item.data == song.data);
+      }
       if (index < 0) return;
       if (_audioPlayer.sequence?.isEmpty ?? true) {
         await _configureQueue(_songs);
+        index = _playbackQueue.indexWhere((item) => item.data == song.data);
       }
-      index = _songs.indexWhere((item) => item.id == song.id);
       _hasStartedPlayback = true;
       await _audioPlayer.seek(Duration.zero, index: index);
       if (!mounted) return;
       setState(() {
-        _currentSong = song;
+        _currentSong = _playbackQueue[index];
       });
-      _currentSongNotifier.value = song;
+      _currentSongNotifier.value = _playbackQueue[index];
+      _schedulePlaybackSessionSave();
       unawaited(_resumePlayback());
       if (openPlayer && mounted) {
         await _openNowPlaying();
@@ -1120,6 +1510,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
           onShuffleChanged: _setShuffle,
           onRepeatChanged: _setRepeat,
           onAddToPlaylist: () => _showAddSongToPlaylist(_currentSong!),
+          onOpenQueue: _showQueue,
           isFavorite: (songId) => _favoriteSongIds.contains(songId),
           onFavoriteChanged: () => _toggleFavorite(_currentSong!),
         ),
@@ -1659,10 +2050,35 @@ class _MusicHomePageState extends State<MusicHomePage> {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: 'Agregar a playlist',
-                onPressed: () => _showAddSongToPlaylist(song),
-                icon: const Icon(Icons.playlist_add_rounded, size: 21),
+              PopupMenuButton<String>(
+                tooltip: 'Más opciones de ${song.title}',
+                onSelected: (action) {
+                  if (action == 'next') _addSongToPlayNext(song);
+                  if (action == 'playlist') _showAddSongToPlaylist(song);
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'next',
+                    child: Row(
+                      children: [
+                        Icon(Icons.queue_music_rounded),
+                        SizedBox(width: 12),
+                        Text('Reproducir a continuación'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'playlist',
+                    child: Row(
+                      children: [
+                        Icon(Icons.playlist_add_rounded),
+                        SizedBox(width: 12),
+                        Text('Agregar a playlist'),
+                      ],
+                    ),
+                  ),
+                ],
+                icon: const Icon(Icons.more_vert_rounded, size: 21),
               ),
               IconButton(
                 tooltip: _favoriteSongIds.contains(song.id)

@@ -39,6 +39,7 @@ void main() {
           onStartSleepTimer: (_) {},
           onCancelSleepTimer: () {},
           onAddToPlaylist: () {},
+          onOpenQueue: () {},
           onShuffleChanged: (_) {},
           onRepeatChanged: (_) async {},
           isFavorite: (_) => false,

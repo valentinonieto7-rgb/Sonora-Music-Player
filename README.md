@@ -10,6 +10,8 @@ Reproductor de música local para Android, pensado y probado en un Samsung Galax
 - Favoritos, historial local, recuento de escuchas y accesos rápidos para aleatorio y más escuchadas.
 - Playlists personalizadas: crear, renombrar y eliminar listas; agregar o quitar canciones, buscar dentro de cada lista y reordenarlas. Se guardan localmente y están disponibles desde el menú lateral.
 - Cola con controles de reproducción, aleatorio y repetición, accesible desde el menú lateral.
+- Cola editable: agregar canciones para reproducir a continuación, reordenar, quitar pistas y vaciarla.
+- Recuerda la cola y la posición actual al cerrar; al volver, restaura la sesión pausada para que puedas continuar cuando quieras.
 - Now Playing con fondos seleccionables (desenfocado, degradado o color de acento) y datos técnicos disponibles del archivo.
 - En Now Playing, desliza horizontalmente sobre la carátula o los datos de la canción para cambiar de pista.
 - Reintentos breves del escaneo cuando Android aún no devuelve archivos justo después de conceder permisos.
@@ -26,7 +28,8 @@ El ajuste de frecuencia solicita un modo de pantalla a Android; no garantiza 120
 ## Organización del código
 
 - `lib/main.dart`: inicialización del audio y arranque de la app.
-- `lib/music_home_page.dart`: biblioteca, pestañas, cola y mini reproductor.
+- `lib/music_home_page.dart`: biblioteca, pestañas, cola, sesión y mini reproductor.
+- `lib/playback_queue.dart` y `lib/playback_session.dart`: operaciones de cola y estado de reproducción guardado.
 - `lib/playlist_model.dart` y `lib/playlist_library_page.dart`: modelo persistente y gestión de playlists.
 - `lib/music_settings_page.dart`: pantalla de ajustes.
 - `lib/now_playing_page.dart`: pantalla de reproducción completa.

@@ -25,6 +25,7 @@ void main() {
             playlists = updated;
           },
           onPlay: (_, _, _, _) async {},
+          onAddNext: (_) async {},
         ),
       ),
     );
@@ -67,6 +68,7 @@ void main() {
         trackPaths: ['/music/track-a.flac', '/music/track-b.mp3'],
       ),
     ];
+    String? queuedPath;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -78,12 +80,19 @@ void main() {
             playlists = updated;
           },
           onPlay: (_, _, _, _) async {},
+          onAddNext: (song) async => queuedPath = song.data,
         ),
       ),
     );
 
     await tester.tap(find.text('Mix'));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Opciones de canción').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reproducir a continuación'));
+    await tester.pumpAndSettle();
+    expect(queuedPath, '/music/track-a.flac');
+
     await tester.tap(find.byTooltip('Agregar canciones'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Track A').last);
@@ -106,7 +115,9 @@ void main() {
 
     await tester.enterText(searchField, '');
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Quitar de la playlist').first);
+    await tester.tap(find.byTooltip('Opciones de canción').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Quitar de la playlist'));
     await tester.pumpAndSettle();
     expect(playlists.single.trackPaths, ['/music/track-b.mp3']);
     expect(tester.takeException(), isNull);
@@ -122,6 +133,7 @@ void main() {
           audioQuery: OnAudioQuery(),
           onChanged: (updated) async => playlists = updated,
           onPlay: (_, _, _, _) async {},
+          onAddNext: (_) async {},
         ),
       ),
     );

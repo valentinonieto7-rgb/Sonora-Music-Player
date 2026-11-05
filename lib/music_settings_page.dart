@@ -289,7 +289,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                 contentPadding: EdgeInsets.zero,
                 title: Text('Frecuencia de pantalla'),
                 subtitle: Text(
-                  'Android y el modo de ahorro pueden limitar la frecuencia efectiva',
+                  'El teléfono puede limitar esta opción.',
                 ),
               ),
               SegmentedButton<String>(
@@ -305,7 +305,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Precargar la cola'),
                 subtitle: const Text(
-                  'Puede reducir pausas entre pistas compatibles, pero prepara más elementos y usa más memoria.',
+                  'Puede ayudar a evitar pausas, pero usa más memoria.',
                 ),
                 value: _preloadQueue,
                 activeTrackColor: theme.colorScheme.primary,
@@ -314,7 +314,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  'El audio se decodifica con el motor nativo de Android. La reproducción sin huecos depende del códec y del archivo; el búfer lo gestiona ExoPlayer/just_audio.',
+                  'La reproducción sin pausas depende de la canción y del teléfono.',
                   style: TextStyle(
                     color: secondaryTextColor(context),
                     fontSize: 12,
@@ -329,9 +329,9 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
             children: [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Ecualizador nativo'),
+                title: const Text('Ecualizador'),
                 subtitle: const Text(
-                  'Ajusta el sonido con el ecualizador de Android',
+                  'Personaliza graves, voces y agudos.',
                 ),
                 value: _equalizerEnabled,
                 activeTrackColor: theme.colorScheme.primary,
@@ -379,7 +379,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
-                        'Inicia una canción para detectar las bandas disponibles.',
+                        'Inicia una canción para ver los controles de sonido.',
                         style: TextStyle(
                           color: secondaryTextColor(context),
                           fontSize: 12,
@@ -420,7 +420,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'La cola de just_audio conserva el avance gapless; el fundido es una rampa de volumen con un solo reproductor.',
+                  'El fundido suaviza el cambio entre pistas; no las mezcla.',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
@@ -489,7 +489,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text('Sonora'),
-                subtitle: Text('Versión 1.3.0 · Flutter · just_audio'),
+                subtitle: Text('Versión 1.4.0'),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,

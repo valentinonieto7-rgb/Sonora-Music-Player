@@ -28,6 +28,7 @@ class NowPlayingPage extends StatefulWidget {
     required this.onStartSleepTimer,
     required this.onCancelSleepTimer,
     required this.onAddToPlaylist,
+    required this.onOpenQueue,
     required this.onShuffleChanged,
     required this.onRepeatChanged,
     required this.isFavorite,
@@ -48,6 +49,7 @@ class NowPlayingPage extends StatefulWidget {
   final ValueChanged<Duration?> onStartSleepTimer;
   final VoidCallback onCancelSleepTimer;
   final VoidCallback onAddToPlaylist;
+  final VoidCallback onOpenQueue;
   final ValueChanged<bool> onShuffleChanged;
   final Future<void> Function(bool enabled) onRepeatChanged;
   final bool Function(int songId) isFavorite;
@@ -304,6 +306,11 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
+          IconButton(
+            tooltip: 'Cola de reproducción',
+            onPressed: widget.onOpenQueue,
+            icon: const Icon(Icons.queue_music_rounded),
+          ),
           ValueListenableBuilder<SleepTimerStatus?>(
             valueListenable: widget.sleepTimerState,
             builder: (context, status, _) => IconButton(

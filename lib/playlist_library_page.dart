@@ -11,6 +11,7 @@ class PlaylistLibraryPage extends StatefulWidget {
     required this.audioQuery,
     required this.onChanged,
     required this.onPlay,
+    required this.onAddNext,
     super.key,
   });
 
@@ -25,6 +26,7 @@ class PlaylistLibraryPage extends StatefulWidget {
     bool openPlayer,
   )
   onPlay;
+  final Future<void> Function(SongModel song) onAddNext;
 
   @override
   State<PlaylistLibraryPage> createState() => _PlaylistLibraryPageState();
@@ -249,6 +251,7 @@ class _PlaylistLibraryPageState extends State<PlaylistLibraryPage> {
                         audioQuery: widget.audioQuery,
                         onChanged: _updatePlaylist,
                         onPlay: widget.onPlay,
+                        onAddNext: widget.onAddNext,
                         onError: _showError,
                       ),
                     ),
@@ -267,6 +270,7 @@ class _PlaylistDetailPage extends StatefulWidget {
     required this.audioQuery,
     required this.onChanged,
     required this.onPlay,
+    required this.onAddNext,
     required this.onError,
   });
 
@@ -281,6 +285,7 @@ class _PlaylistDetailPage extends StatefulWidget {
     bool openPlayer,
   )
   onPlay;
+  final Future<void> Function(SongModel song) onAddNext;
   final ValueChanged<String> onError;
 
   @override
@@ -480,10 +485,26 @@ class _PlaylistDetailPageState extends State<_PlaylistDetailPage> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            tooltip: 'Quitar de la playlist',
-            onPressed: () => _remove(path),
-            icon: const Icon(Icons.remove_circle_outline_rounded),
+          PopupMenuButton<String>(
+            tooltip: 'Opciones de canción',
+            onSelected: (action) {
+              if (action == 'remove') _remove(path);
+              if (action == 'next' && song != null) {
+                widget.onAddNext(song);
+              }
+            },
+            itemBuilder: (context) => [
+              if (song != null)
+                const PopupMenuItem(
+                  value: 'next',
+                  child: Text('Reproducir a continuación'),
+                ),
+              const PopupMenuItem(
+                value: 'remove',
+                child: Text('Quitar de la playlist'),
+              ),
+            ],
+            icon: const Icon(Icons.more_vert_rounded),
           ),
           if (reorderable)
             ReorderableDragStartListener(
