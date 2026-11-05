@@ -8,6 +8,7 @@ Reproductor de música local para Android, pensado y probado en un Samsung Galax
 - Pestañas de canciones, álbumes, artistas y carpeta.
 - Carátulas consultadas a 600 px y calidad 100, con renderizado de alta calidad y caché limitada.
 - Favoritos, historial local, recuento de escuchas y accesos rápidos para aleatorio y más escuchadas.
+- Playlists personalizadas: crear, renombrar y eliminar listas; agregar o quitar canciones, buscar dentro de cada lista y reordenarlas. Se guardan localmente y están disponibles desde el menú lateral.
 - Cola con controles de reproducción, aleatorio y repetición, accesible desde el menú lateral.
 - Now Playing con fondos seleccionables (desenfocado, degradado o color de acento) y datos técnicos disponibles del archivo.
 - En Now Playing, desliza horizontalmente sobre la carátula o los datos de la canción para cambiar de pista.
@@ -15,6 +16,7 @@ Reproductor de música local para Android, pensado y probado en un Samsung Galax
 - Notificación multimedia y reproducción en segundo plano.
 - Ecualizador nativo de Android con preajustes Flat, Bass Boost, Rock, Pop y Vocal; bandas y preferencias personalizadas guardadas.
 - Cola gapless de just_audio y fundido suave opcional mediante una rampa de volumen configurable.
+- Sleep Timer de 15, 30, 45 o 60 minutos, o al terminar la canción actual, con fade-out de 30 segundos y cancelación desde Now Playing.
 - Modo AMOLED y solicitud de 60 Hz, 120 Hz o frecuencia automática.
 - Temas oscuro/claro, colores de acento y preferencias guardadas.
 - Ajuste para omitir canciones de menos de 30 segundos y opción para preparar la cola.
@@ -25,9 +27,10 @@ El ajuste de frecuencia solicita un modo de pantalla a Android; no garantiza 120
 
 - `lib/main.dart`: inicialización del audio y arranque de la app.
 - `lib/music_home_page.dart`: biblioteca, pestañas, cola y mini reproductor.
+- `lib/playlist_model.dart` y `lib/playlist_library_page.dart`: modelo persistente y gestión de playlists.
 - `lib/music_settings_page.dart`: pantalla de ajustes.
 - `lib/now_playing_page.dart`: pantalla de reproducción completa.
-- `lib/equalizer_presets.dart`, `lib/equalizer_state.dart` y `lib/playback_transition_controller.dart`: preajustes del ecualizador, estado de bandas y transiciones suaves.
+- `lib/equalizer_presets.dart`, `lib/equalizer_state.dart`, `lib/sleep_timer_state.dart` y `lib/playback_transition_controller.dart`: preajustes del ecualizador, estado de bandas y temporizador/transiciones de volumen.
 - `lib/artwork_widgets.dart`, `lib/audio_file_info.dart`, `lib/marquee_text.dart`, `lib/ui_helpers.dart` y `lib/format_duration.dart`: widgets y utilidades compartidos.
 - Los iconos de inicio Android usan las variantes por densidad y el icono adaptativo/monocromático de `android/app/src/main/res`.
 

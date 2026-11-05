@@ -18,6 +18,8 @@ import 'equalizer_presets.dart';
 import 'equalizer_state.dart';
 import 'music_settings_page.dart';
 import 'now_playing_page.dart';
+import 'playlist_library_page.dart';
+import 'playlist_model.dart';
 import 'playback_transition_controller.dart';
 import 'ui_helpers.dart';
 import 'format_duration.dart';
@@ -140,6 +142,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   static const _favoritesPreferenceKey = 'favorite_song_ids';
   static const _historyPreferenceKey = 'listening_history';
   static const _playCountsPreferenceKey = 'song_play_counts';
+  static const _playlistsPreferenceKey = 'custom_playlists';
   final OnAudioQuery _audioQuery = OnAudioQuery();
   final AndroidEqualizer _equalizer = AndroidEqualizer();
   late final AudioPlayer _audioPlayer = AudioPlayer(
@@ -153,6 +156,9 @@ class _MusicHomePageState extends State<MusicHomePage> {
   final ValueNotifier<SongModel?> _currentSongNotifier = ValueNotifier(null);
 
   List<SongModel> _songs = [];
+  List<SongModel> _playbackQueue = [];
+  List<Playlist> _playlists = [];
+  String? _activePlaylistId;
   final Set<int> _favoriteSongIds = {};
   List<int> _recentSongIds = [];
   Map<int, int> _playCounts = {};
@@ -228,10 +234,10 @@ class _MusicHomePageState extends State<MusicHomePage> {
       if (!_hasStartedPlayback ||
           index == null ||
           index < 0 ||
-          index >= _songs.length) {
+          index >= _playbackQueue.length) {
         return;
       }
-      final song = _songs[index];
+      final song = _playbackQueue[index];
       if (_currentSong?.id == song.id) return;
       _currentSong = song;
       _currentSongNotifier.value = song;
@@ -239,6 +245,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
       if (mounted) setState(() {});
     });
     unawaited(_restoreListeningData());
+    unawaited(_restorePlaylists());
     unawaited(_restoreLibrary());
   }
 
@@ -458,6 +465,223 @@ class _MusicHomePageState extends State<MusicHomePage> {
     }
   }
 
+  Future<void> _restorePlaylists() async {
+    try {
+      final savedPlaylists = await _preferences.getString(_playlistsPreferenceKey);
+      if (savedPlaylists == null) return;
+      final decoded = jsonDecode(savedPlaylists);
+      if (decoded is! List) {
+        throw const FormatException('El formato de playlists no es válido');
+      }
+      final playlists = decoded
+          .whereType<Map<String, dynamic>>()
+          .map(Playlist.fromJson)
+          .toList();
+      if (!mounted) return;
+      setState(() => _playlists = playlists);
+    } catch (error) {
+      debugPrint('No se pudieron recuperar las playlists: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudieron cargar las playlists')),
+      );
+    }
+  }
+
+  Future<void> _savePlaylists(List<Playlist> playlists) async {
+    await _preferences.setString(
+      _playlistsPreferenceKey,
+      jsonEncode(playlists.map((playlist) => playlist.toJson()).toList()),
+    );
+    if (mounted) setState(() => _playlists = List.of(playlists));
+  }
+
+  void _showPlaylistMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _addSongToPlaylist(SongModel song, Playlist playlist) async {
+    final updatedPlaylist = playlist.addTrack(song.data);
+    if (updatedPlaylist == null) {
+      _showPlaylistMessage('Esta canción ya pertenece a "${playlist.name}".');
+      return;
+    }
+    final updatedPlaylists = _playlists
+        .map((item) => item.id == playlist.id ? updatedPlaylist : item)
+        .toList();
+    try {
+      await _savePlaylists(updatedPlaylists);
+      _showPlaylistMessage('Agregada a "${playlist.name}".');
+    } catch (error) {
+      _showPlaylistMessage('No se pudo guardar la playlist: $error');
+    }
+  }
+
+  Future<void> _showAddSongToPlaylist(SongModel song) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text(
+                'Gestionar playlists',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+            ),
+            for (final playlist in _playlists) ...[
+              Builder(
+                builder: (context) {
+                  final containsSong = playlist.trackPaths.contains(song.data);
+                  return ListTile(
+                    leading: Icon(
+                      containsSong
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.queue_music_rounded,
+                    ),
+                    title: Text(playlist.name),
+                    subtitle: Text(
+                      containsSong
+                          ? 'Ya pertenece · ${playlist.trackPaths.length} canciones'
+                          : '${playlist.trackPaths.length} canciones',
+                    ),
+                    trailing: Icon(
+                      containsSong ? Icons.remove_circle_outline : Icons.add,
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      if (containsSong) {
+                        _removeSongFromPlaylist(song, playlist);
+                      } else {
+                        _addSongToPlaylist(song, playlist);
+                      }
+                    },
+                  );
+                },
+              ),
+            ],
+            ListTile(
+              leading: const Icon(Icons.add_circle_outline_rounded),
+              title: const Text('Crear nueva playlist'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _createPlaylistWithSong(song);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeSongFromPlaylist(
+    SongModel song,
+    Playlist playlist,
+  ) async {
+    final updatedPlaylist = playlist.removeTrack(song.data);
+    final updatedPlaylists = _playlists
+        .map((item) => item.id == playlist.id ? updatedPlaylist : item)
+        .toList();
+    try {
+      await _savePlaylists(updatedPlaylists);
+      _showPlaylistMessage('Quitada de "${playlist.name}".');
+    } catch (error) {
+      _showPlaylistMessage('No se pudo guardar la playlist: $error');
+    }
+  }
+
+  Future<void> _createPlaylistWithSong(SongModel song) async {
+    var enteredName = '';
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Nueva playlist'),
+        content: TextFormField(
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(hintText: 'Nombre de la playlist'),
+          onChanged: (value) => enteredName = value,
+          onFieldSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, enteredName.trim()),
+            child: const Text('Crear'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    final playlist = Playlist(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: name.trim(),
+      trackPaths: [song.data],
+    );
+    try {
+      await _savePlaylists([..._playlists, playlist]);
+      _showPlaylistMessage('Playlist "${playlist.name}" creada.');
+    } catch (error) {
+      _showPlaylistMessage('No se pudo guardar la playlist: $error');
+    }
+  }
+
+  Future<void> _openPlaylists() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => PlaylistLibraryPage(
+          playlists: _playlists,
+          songs: _songs,
+          audioQuery: _audioQuery,
+          onChanged: _savePlaylists,
+          onPlay: _playPlaylist,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _playPlaylist(
+    String playlistId,
+    List<SongModel> songs,
+    int startIndex,
+    bool openPlayer,
+  ) async {
+    if (songs.isEmpty || startIndex < 0 || startIndex >= songs.length) return;
+    try {
+      await _requestNotificationPermission();
+      if (_isShuffleEnabled) {
+        await _audioPlayer.setShuffleModeEnabled(false);
+        _isShuffleEnabled = false;
+        if (mounted) setState(() {});
+      }
+      await _configureQueue(songs, playlistId: playlistId);
+      _hasStartedPlayback = true;
+      final song = songs[startIndex];
+      await _audioPlayer.seek(Duration.zero, index: startIndex);
+      if (!mounted) return;
+      setState(() => _currentSong = song);
+      _currentSongNotifier.value = song;
+      unawaited(_recordPlayedSong(song));
+      unawaited(_resumePlayback());
+      if (openPlayer) await _openNowPlaying();
+    } catch (error) {
+      _showPlaybackError(error);
+    }
+  }
+
   Future<void> _toggleFavorite(SongModel song) async {
     setState(() {
       if (!_favoriteSongIds.add(song.id)) {
@@ -533,7 +757,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   }
 
   Future<void> _showQueue() async {
-    if (_songs.isEmpty) {
+    if (_playbackQueue.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Primero selecciona una carpeta musical')),
       );
@@ -552,15 +776,15 @@ class _MusicHomePageState extends State<MusicHomePage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
                 child: Text(
-                  'Cola de reproducción · ${_songs.length}',
+                  'Cola de reproducción · ${_playbackQueue.length}',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
               Expanded(
                 child: ListView.builder(
-                  itemCount: _songs.length,
+                  itemCount: _playbackQueue.length,
                   itemBuilder: (context, index) {
-                    final song = _songs[index];
+                    final song = _playbackQueue[index];
                     return ListTile(
                       leading: Text('${index + 1}'),
                       title: Text(song.title, maxLines: 1),
@@ -570,7 +794,17 @@ class _MusicHomePageState extends State<MusicHomePage> {
                           : null,
                       onTap: () {
                         Navigator.pop(context);
-                        _playSong(song, openPlayer: true);
+                        final playlistId = _activePlaylistId;
+                        if (playlistId == null) {
+                          _playSong(song, openPlayer: true);
+                        } else {
+                          _playPlaylist(
+                            playlistId,
+                            _playbackQueue,
+                            index,
+                            true,
+                          );
+                        }
                       },
                     );
                   },
@@ -694,6 +928,9 @@ class _MusicHomePageState extends State<MusicHomePage> {
   Future<void> _playSong(SongModel song, {bool openPlayer = false}) async {
     try {
       await _requestNotificationPermission();
+      if (_activePlaylistId != null) {
+        await _configureQueue(_songs);
+      }
       var index = _songs.indexWhere((item) => item.id == song.id);
       if (index < 0) return;
       if (_audioPlayer.sequence?.isEmpty ?? true) {
@@ -746,10 +983,10 @@ class _MusicHomePageState extends State<MusicHomePage> {
   }
 
   Future<void> _playNext() async {
-    if (_songs.isEmpty) return;
+    if (_playbackQueue.isEmpty) return;
     try {
       if (_currentSong == null) {
-        await _playSong(_songs.first);
+        await _playSong(_playbackQueue.first);
       } else {
         await _audioPlayer.seekToNext();
       }
@@ -759,7 +996,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
   }
 
   Future<void> _playPrevious() async {
-    if (_songs.isEmpty) return;
+    if (_playbackQueue.isEmpty) return;
 
     try {
       if (_audioPlayer.position > const Duration(seconds: 3)) {
@@ -790,15 +1027,17 @@ class _MusicHomePageState extends State<MusicHomePage> {
   Future<void> _setQueuePreload(bool enabled) async {
     final wasPlaying = _audioPlayer.playing;
     final currentIndex = _audioPlayer.currentIndex;
+    final queue = List<SongModel>.of(_playbackQueue);
+    final playlistId = _activePlaylistId;
     _preloadQueueOverride = enabled;
     try {
       await widget.onPreloadQueueChanged(enabled);
-      if (!mounted || _songs.isEmpty) return;
-      await _configureQueue(_songs);
-      if (currentIndex != null && currentIndex < _songs.length) {
+      if (!mounted || queue.isEmpty) return;
+      await _configureQueue(queue, playlistId: playlistId);
+      if (currentIndex != null && currentIndex < queue.length) {
         _hasStartedPlayback = true;
         await _audioPlayer.seek(Duration.zero, index: currentIndex);
-        _currentSong = _songs[currentIndex];
+        _currentSong = queue[currentIndex];
         _currentSongNotifier.value = _currentSong;
         if (wasPlaying) unawaited(_resumePlayback());
         setState(() {});
@@ -810,11 +1049,16 @@ class _MusicHomePageState extends State<MusicHomePage> {
     }
   }
 
-  Future<void> _configureQueue(List<SongModel> songs) async {
+  Future<void> _configureQueue(
+    List<SongModel> songs, {
+    String? playlistId,
+  }) async {
     await _audioPlayer.stop();
     _hasStartedPlayback = false;
     _currentSong = null;
     _currentSongNotifier.value = null;
+    _playbackQueue = List.of(songs);
+    _activePlaylistId = playlistId;
     if (songs.isEmpty) return;
     final children = songs
         .map((song) {
@@ -858,14 +1102,24 @@ class _MusicHomePageState extends State<MusicHomePage> {
           currentSong: _currentSongNotifier,
           audioQuery: _audioQuery,
           audioPlayer: _audioPlayer,
+          sleepTimerState: _transitionController.sleepTimerState,
           backgroundStyle: widget.playerBackgroundStyle,
           accentColor: widget.accentColor,
           isShuffleEnabled: _isShuffleEnabled,
           isRepeatEnabled: _isRepeatEnabled,
           onPrevious: _playPrevious,
           onNext: _playNext,
+          onStartSleepTimer: (duration) {
+            if (duration == null) {
+              _transitionController.startEndOfTrack();
+            } else {
+              _transitionController.startCountdown(duration);
+            }
+          },
+          onCancelSleepTimer: _transitionController.cancelSleepTimer,
           onShuffleChanged: _setShuffle,
           onRepeatChanged: _setRepeat,
+          onAddToPlaylist: () => _showAddSongToPlaylist(_currentSong!),
           isFavorite: (songId) => _favoriteSongIds.contains(songId),
           onFavoriteChanged: () => _toggleFavorite(_currentSong!),
         ),
@@ -1406,6 +1660,11 @@ class _MusicHomePageState extends State<MusicHomePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
+                tooltip: 'Agregar a playlist',
+                onPressed: () => _showAddSongToPlaylist(song),
+                icon: const Icon(Icons.playlist_add_rounded, size: 21),
+              ),
+              IconButton(
                 tooltip: _favoriteSongIds.contains(song.id)
                     ? 'Quitar de favoritos'
                     : 'Añadir a favoritos',
@@ -1666,6 +1925,14 @@ class _MusicHomePageState extends State<MusicHomePage> {
               onTap: () {
                 Navigator.pop(context);
                 _showQueue();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.library_music_rounded),
+              title: const Text('Playlists'),
+              onTap: () {
+                Navigator.pop(context);
+                _openPlaylists();
               },
             ),
             ListTile(

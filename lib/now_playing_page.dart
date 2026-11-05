@@ -11,18 +11,23 @@ import 'audio_file_info.dart';
 import 'marquee_text.dart';
 import 'ui_helpers.dart';
 import 'format_duration.dart';
+import 'sleep_timer_state.dart';
 
 class NowPlayingPage extends StatefulWidget {
   const NowPlayingPage({
     required this.currentSong,
     required this.audioQuery,
     required this.audioPlayer,
+    required this.sleepTimerState,
     required this.backgroundStyle,
     required this.accentColor,
     required this.isShuffleEnabled,
     required this.isRepeatEnabled,
     required this.onPrevious,
     required this.onNext,
+    required this.onStartSleepTimer,
+    required this.onCancelSleepTimer,
+    required this.onAddToPlaylist,
     required this.onShuffleChanged,
     required this.onRepeatChanged,
     required this.isFavorite,
@@ -33,12 +38,16 @@ class NowPlayingPage extends StatefulWidget {
   final ValueListenable<SongModel?> currentSong;
   final OnAudioQuery audioQuery;
   final AudioPlayer audioPlayer;
+  final ValueListenable<SleepTimerStatus?> sleepTimerState;
   final String backgroundStyle;
   final Color accentColor;
   final bool isShuffleEnabled;
   final bool isRepeatEnabled;
   final Future<void> Function() onPrevious;
   final Future<void> Function() onNext;
+  final ValueChanged<Duration?> onStartSleepTimer;
+  final VoidCallback onCancelSleepTimer;
+  final VoidCallback onAddToPlaylist;
   final ValueChanged<bool> onShuffleChanged;
   final Future<void> Function(bool enabled) onRepeatChanged;
   final bool Function(int songId) isFavorite;
@@ -85,6 +94,73 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       _favoriteSongId = song.id;
       _isFavorite = widget.isFavorite(song.id);
     });
+  }
+
+  Future<void> _showSleepTimerSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: ValueListenableBuilder<SleepTimerStatus?>(
+            valueListenable: widget.sleepTimerState,
+            builder: (context, timerStatus, _) => Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                Text(
+                  'Temporizador de apagado',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                if (timerStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text('Activo: ${timerStatus.label}'),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.timer_off_outlined),
+                    title: const Text('Cancelar temporizador'),
+                    onTap: () {
+                      widget.onCancelSleepTimer();
+                      Navigator.pop(context);
+                    },
+                  ),
+                  const Divider(),
+                ],
+                for (final minutes in [15, 30, 45, 60])
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.schedule_rounded),
+                    title: Text('En $minutes minutos'),
+                    onTap: () {
+                      widget.onStartSleepTimer(Duration(minutes: minutes));
+                      Navigator.pop(context);
+                    },
+                  ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.queue_music_rounded),
+                  title: const Text('Al terminar la canción actual'),
+                  subtitle: const Text(
+                    'Bajará el volumen durante 30 segundos',
+                  ),
+                  enabled: widget.audioPlayer.duration != null,
+                  onTap: widget.audioPlayer.duration == null
+                      ? null
+                      : () {
+                          widget.onStartSleepTimer(null);
+                          Navigator.pop(context);
+                        },
+                ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _trackSwipeTarget(Widget child) {
@@ -227,6 +303,21 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          ValueListenableBuilder<SleepTimerStatus?>(
+            valueListenable: widget.sleepTimerState,
+            builder: (context, status, _) => IconButton(
+              tooltip: status == null
+                  ? 'Temporizador de apagado'
+                  : 'Temporizador activo: ${status.label}',
+              onPressed: _showSleepTimerSheet,
+              icon: Icon(
+                status == null ? Icons.timer_outlined : Icons.timer_rounded,
+                color: status == null ? Colors.white : widget.accentColor,
+              ),
+            ),
+          ),
+        ],
       ),
       body: Stack(
         fit: StackFit.expand,
@@ -383,6 +474,13 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                                   .colorScheme
                                                   .primary
                                             : secondaryTextColor(context, 0.7),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Agregar a playlist',
+                                      onPressed: widget.onAddToPlaylist,
+                                      icon: const Icon(
+                                            Icons.playlist_add_rounded,
                                       ),
                                     ),
                                   ],

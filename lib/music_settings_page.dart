@@ -489,7 +489,7 @@ class _MusicSettingsPageState extends State<MusicSettingsPage> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text('Sonora'),
-                subtitle: Text('Versión 1.0.0 · Flutter · just_audio'),
+                subtitle: Text('Versión 1.3.0 · Flutter · just_audio'),
               ),
               ListTile(
                 contentPadding: EdgeInsets.zero,

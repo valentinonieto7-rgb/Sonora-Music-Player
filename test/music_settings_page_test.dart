@@ -69,5 +69,9 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Fundido suave entre canciones'), findsOneWidget);
     expect(find.text('14 kHz'), findsOneWidget);
+
+    await tester.drag(find.byType(ListView).first, const Offset(0, -1800));
+    await tester.pumpAndSettle();
+    expect(find.text('Versión 1.3.0 · Flutter · just_audio'), findsOneWidget);
   });
 }
